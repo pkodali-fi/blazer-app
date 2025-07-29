@@ -1,0 +1,110 @@
+﻿@page "/"
+@using System.IO
+@using Microsoft.AspNetCore.Components.Forms
+@inject IWebHostEnvironment WebHostEnvironment
+@inject NavigationManager NavigationManager
+
+<h3>PDF File Upload (Only) - Display Original Name</h3>
+
+<InputFile OnChange="HandleFileSelection" accept=".pdf" />
+
+@if (SelectedFile != null)
+{
+    <p>Selected File: @SelectedFile.Name</p>
+    <button @onclick="UploadFile" disabled="@IsUploading">@UploadButtonText</button>
+}
+
+@if (!string.IsNullOrEmpty(UploadStatus))
+{
+    <p>@UploadStatus</p>
+}
+
+@code {
+    private IBrowserFile SelectedFile;
+    private bool IsUploading = false;
+    private string UploadStatus = "";
+    private string UploadButtonText = "Upload File";
+    private string OriginalFileName = ""; // Variable to store the original filename
+
+    private void HandleFileSelection(InputFileChangeEventArgs e)
+    {
+        SelectedFile = e.File;
+        OriginalFileName = e.File.Name; // Store the original filename
+        UploadStatus = ""; // Clear previous status
+    }
+
+    private async Task UploadFile()
+    {
+        if (SelectedFile == null)
+        {
+            UploadStatus = "Please select a file first.";
+            return;
+        }
+
+        // --- Server-Side PDF Validation ---
+        if (!SelectedFile.Name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            UploadStatus = "Error: Only PDF files are allowed.";
+            SelectedFile = null;
+            OriginalFileName = ""; // Clear original filename as well
+            return;
+        }
+
+        IsUploading = true;
+        UploadButtonText = "Uploading...";
+        UploadStatus = "Uploading...";
+
+        try
+        {
+            // Use MemoryStream for multiple copies of the file content
+            const long maxFileSize = 10 * 1024 * 1024; // 10 MB example limit
+            await using MemoryStream memoryStream = new();
+            await SelectedFile.OpenReadStream(maxFileSize).CopyToAsync(memoryStream);
+            memoryStream.Seek(0, SeekOrigin.Begin); // Reset MemoryStream position for reuse
+
+            // --- Part 1: Save to wwwroot/uploads ---
+            var wwwrootUploadPath = Path.Combine(WebHostEnvironment.WebRootPath, "uploads");
+            if (!Directory.Exists(wwwrootUploadPath))
+                Directory.CreateDirectory(wwwrootUploadPath);
+            var wwwrootUniqueFileName = $"{Guid.NewGuid()}{Path.GetExtension(SelectedFile.Name)}";
+            var wwwrootFilePath = Path.Combine(wwwrootUploadPath, wwwrootUniqueFileName);
+
+            await using (FileStream fsWwwroot = new(wwwrootFilePath, FileMode.Create))
+            {
+                await memoryStream.CopyToAsync(fsWwwroot);
+            }
+            memoryStream.Seek(0, SeekOrigin.Begin); // Reset MemoryStream position again
+
+            // --- Part 2: Save to ProjectRoot/LocalUploads ---
+            var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            var projectRootPath = Path.GetFullPath(Path.Combine(baseDirectory, "..", "..", ".."));
+            var localUploadPath = Path.Combine(projectRootPath, "LocalUploads");
+            if (!Directory.Exists(localUploadPath))
+                Directory.CreateDirectory(localUploadPath);
+            var localUniqueFileName = $"{Guid.NewGuid()}{Path.GetExtension(SelectedFile.Name)}";
+            var localFilePath = Path.Combine(localUploadPath, localUniqueFileName);
+
+            await using (FileStream fsLocal = new(localFilePath, FileMode.Create))
+            {
+                await memoryStream.CopyToAsync(fsLocal);
+            }
+
+            // Display the original filename in the success message
+            UploadStatus = $"PDF file '{OriginalFileName}' uploaded successfully to both locations!";
+            var wwwrootLink = $"{NavigationManager.BaseUri}uploads/{wwwrootUniqueFileName}";
+            Console.WriteLine($"WWWRoot PDF Link: {wwwrootLink}");
+            Console.WriteLine($"Local PDF File Path: {localFilePath}");
+        }
+        catch (Exception ex)
+        {
+            UploadStatus = $"Error uploading file: {ex.Message}";
+        }
+        finally
+        {
+            IsUploading = false;
+            UploadButtonText = "Upload File";
+            SelectedFile = null;
+            OriginalFileName = ""; // Clear after upload attempt
+        }
+    }
+}
