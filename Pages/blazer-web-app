@@ -1,0 +1,91 @@
+@page "/file-upload"
+@rendermode InteractiveServer 
+@using System.IO
+@using System.Net
+@inject IWebHostEnvironment env
+
+<h3>File Upload</h3>
+
+<InputFile OnChange="HandleFileSelection" multiple />
+<button @onclick="UploadFiles">Upload Files</button>
+
+@if (selectedFiles.Any())
+{
+    <h4>Selected Files:</h4>
+    <ul>
+        @foreach (var file in selectedFiles)
+        {
+            <li>@file.Name</li>
+        }
+    </ul>
+}
+
+@if (!string.IsNullOrEmpty(uploadStatus))
+{
+    <p>@uploadStatus</p>
+}
+
+@code {
+    private IReadOnlyList<IBrowserFile> selectedFiles = new List<IBrowserFile>();
+    private string uploadStatus = "";
+
+    private void HandleFileSelection(InputFileChangeEventArgs e)
+    {
+        selectedFiles = e.GetMultipleFiles(); 
+    }
+
+    private async Task UploadFiles()
+    {
+        if (!selectedFiles.Any())
+        {
+            uploadStatus = "Please select files to upload.";
+            return;
+        }
+
+        foreach (var file in selectedFiles)
+        {
+            // 1. Upload to Local Project Folder
+            try
+            {
+                var filePath = Path.Combine(env.WebRootPath, "Uploads", file.Name); //
+                await using FileStream fs = new(filePath, FileMode.Create); //
+                await file.OpenReadStream().CopyToAsync(fs); //
+                uploadStatus += $"Uploaded {file.Name} to local folder successfully. ";
+            }
+            catch (Exception ex)
+            {
+                uploadStatus += $"Error uploading {file.Name} to local folder: {ex.Message}. ";
+            }
+
+            // 2. Upload to FTP Server
+            try
+            {
+                FtpWebRequest request = (FtpWebRequest)WebRequest.Create("ftp://your_ftp_server_address/" + file.Name); //
+                request.Method = WebRequestMethods.Ftp.UploadFile; //
+                request.Credentials = new NetworkCredential("your_ftp_username", "your_ftp_password"); //
+
+                // Use a memory stream to avoid reading the file twice from the client for FTP upload
+                using (var memoryStream = new MemoryStream())
+                {
+                    await file.OpenReadStream().CopyToAsync(memoryStream);
+                    memoryStream.Position = 0; // Reset stream position
+
+                    using (Stream requestStream = await request.GetRequestStreamAsync())
+                    {
+                        await memoryStream.CopyToAsync(requestStream);
+                    }
+                }
+
+                using (FtpWebResponse response = (FtpWebResponse)request.GetResponse()) //
+                {
+                    uploadStatus += $"Uploaded {file.Name} to FTP server successfully. Status: {response.StatusDescription}. "; //
+                }
+            }
+            catch (Exception ex)
+            {
+                uploadStatus += $"Error uploading {file.Name} to FTP server: {ex.Message}. ";
+            }
+        }
+        selectedFiles = new List<IBrowserFile>(); // Clear selected files after upload
+    }
+}
